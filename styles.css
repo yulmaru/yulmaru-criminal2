@@ -5999,8 +5999,8 @@ select:focus {
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  background: linear-gradient(180deg, #2c68d8 0%, #2d78c8 34%, #1688aa 58%, #071521 100%) !important;
-  background-image: linear-gradient(180deg, #2c68d8 0%, #2d78c8 34%, #1688aa 58%, #071521 100%) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #ffffff 52%, #eef0f3 68%, #071521 100%) !important;
+  background-image: linear-gradient(180deg, #ffffff 0%, #ffffff 52%, #eef0f3 68%, #071521 100%) !important;
 }
 
 .home-content-feed .channel-post-media.channel-post-media-logo::after {
