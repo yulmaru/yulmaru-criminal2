@@ -92,14 +92,6 @@ function saveQuestions() {
   localStorage.setItem("legendQuestions", JSON.stringify(state.questions));
 }
 
-const LEAD_STORAGE_KEY = "yulmaruLeadSubmissions";
-
-function saveLeadLocally(payload, deliveryStatus) {
-  const savedLeads = JSON.parse(localStorage.getItem(LEAD_STORAGE_KEY) || "[]");
-  savedLeads.push({ ...payload, deliveryStatus });
-  localStorage.setItem(LEAD_STORAGE_KEY, JSON.stringify(savedLeads.slice(-200)));
-}
-
 function buildLeadPayload(form, source) {
   const formData = new FormData(form);
   const randomId = window.crypto?.randomUUID?.() || `lead-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -122,26 +114,19 @@ async function submitLeadPayload(payload) {
   const endpoint = String(window.LEAD_API_ENDPOINT || "").trim();
 
   if (!endpoint) {
-    saveLeadLocally(payload, "local-only");
-    return "local";
+    return "not-configured";
   }
 
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-    if (!response.ok) {
-      throw new Error(`Lead API responded with ${response.status}`);
-    }
-    return "remote";
-  } catch (error) {
-    console.error("Lead submission failed; saved locally for recovery.", error);
-    saveLeadLocally(payload, "pending");
-    return "queued";
+  if (!response.ok) {
+    throw new Error(`Lead API responded with ${response.status}`);
   }
+  return "remote";
 }
 
 function setLeadStatus(statusElement, message, type) {
@@ -155,9 +140,16 @@ async function handleLeadFormSubmit(form, statusElement, source) {
   const submitButton = form.querySelector('button[type="submit"]');
   const originalLabel = submitButton?.textContent || "";
   const payload = buildLeadPayload(form, source);
+  const phoneDigits = payload.phone.replace(/\D/g, "");
 
   if (!payload.name || !payload.phone || !payload.consent) {
     setLeadStatus(statusElement, "필수 정보를 확인해 주세요.", "error");
+    return;
+  }
+
+  if (phoneDigits.length < 9 || phoneDigits.length > 11) {
+    setLeadStatus(statusElement, "연락처를 정확히 입력해 주세요.", "error");
+    form.elements.phone?.focus();
     return;
   }
 
@@ -168,13 +160,15 @@ async function handleLeadFormSubmit(form, statusElement, source) {
 
   try {
     const result = await submitLeadPayload(payload);
-    const message = result === "remote"
-      ? "상담 신청이 접수되었습니다. 빠르게 연락드리겠습니다."
-      : result === "queued"
-        ? "접수 연결이 원활하지 않아 이 기기에 안전하게 임시 저장했습니다."
-        : "상담 신청이 이 기기에 임시 저장되었습니다.";
-    setLeadStatus(statusElement, message, "success");
+    if (result === "not-configured") {
+      setLeadStatus(statusElement, "DB 접수 주소 설정이 필요합니다. 전화 상담을 이용해 주세요.", "error");
+      return;
+    }
+    setLeadStatus(statusElement, "상담 신청이 접수되었습니다. 빠르게 연락드리겠습니다.", "success");
     form.reset();
+    if (form === heroLeadForm && form.elements.privacy) {
+      form.elements.privacy.checked = true;
+    }
   } catch (error) {
     console.error("Unable to save lead.", error);
     setLeadStatus(statusElement, "접수에 실패했습니다. 전화 상담을 이용해 주세요.", "error");
@@ -603,7 +597,7 @@ function renderFeaturedRecommendVideos() {
       const viewText = item.views ? `조회 ${item.views}` : "";
 
       return `
-        <a class="featured-recommend-card" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-category="${escapeHtml(item.category)}">
+        <a class="featured-recommend-card" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-category="${escapeHtml(item.category)}" aria-label="${escapeHtml(item.title)} 유튜브 영상 보기">
           <div class="featured-recommend-thumb">${thumbnailImage}<span>▶</span></div>
           <div class="featured-recommend-copy">
             <span class="featured-recommend-source">${escapeHtml(sourceText)}</span>
@@ -820,7 +814,6 @@ function enableDragScroll(selector) {
       lastTime = performance.now();
       velocity = 0;
       scroller.classList.add("is-dragging");
-      scroller.setPointerCapture?.(event.pointerId);
     });
 
     scroller.addEventListener("pointermove", (event) => {
@@ -830,10 +823,12 @@ function enableDragScroll(selector) {
       const totalWalk = event.clientX - startX;
       const elapsed = Math.max(now - lastTime, 16);
 
-      if (Math.abs(totalWalk) > 5) {
+      if (!moved && Math.abs(totalWalk) > 5) {
         moved = true;
-        event.preventDefault();
+        scroller.setPointerCapture?.(event.pointerId);
       }
+
+      if (moved) event.preventDefault();
 
       scroller.scrollLeft -= deltaX;
       velocity = (deltaX / elapsed) * 16;
@@ -846,7 +841,9 @@ function enableDragScroll(selector) {
         if (!isDown) return;
         isDown = false;
         scroller.classList.remove("is-dragging");
-        scroller.releasePointerCapture?.(event.pointerId);
+        if (scroller.hasPointerCapture?.(event.pointerId)) {
+          scroller.releasePointerCapture?.(event.pointerId);
+        }
 
         if (eventName === "pointerup" && isSituationScroller && !moved) {
           const chip = startTarget?.closest?.(".video-filter-chip");
@@ -934,6 +931,56 @@ function initFeaturedRecommendControls() {
   window.addEventListener("resize", update);
   requestAnimationFrame(update);
 }
+
+function initChannelSideCarousel() {
+  const carousel = document.querySelector("[data-channel-side-carousel]");
+  const track = carousel?.querySelector("[data-channel-side-track]");
+  const slides = Array.from(carousel?.querySelectorAll(".channel-side-slide") || []);
+  const dots = Array.from(carousel?.querySelectorAll(".channel-side-dots span") || []);
+  if (!carousel || !track || slides.length < 2) return;
+
+  let activeIndex = 0;
+  let rotationTimer = 0;
+
+  const render = () => {
+    track.style.transform = `translateX(-${activeIndex * 100}%)`;
+    slides.forEach((slide, index) => {
+      const isActive = index === activeIndex;
+      slide.classList.toggle("is-active", isActive);
+      slide.setAttribute("aria-hidden", isActive ? "false" : "true");
+      slide.tabIndex = isActive ? 0 : -1;
+      dots[index]?.classList.toggle("is-active", isActive);
+    });
+  };
+
+  const stop = () => {
+    window.clearInterval(rotationTimer);
+    rotationTimer = 0;
+  };
+
+  const start = () => {
+    stop();
+    if (document.hidden) return;
+    rotationTimer = window.setInterval(() => {
+      activeIndex = (activeIndex + 1) % slides.length;
+      render();
+    }, 4200);
+  };
+
+  carousel.addEventListener("mouseenter", stop);
+  carousel.addEventListener("mouseleave", start);
+  carousel.addEventListener("focusin", stop);
+  carousel.addEventListener("focusout", (event) => {
+    if (!carousel.contains(event.relatedTarget)) start();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stop();
+    else start();
+  });
+
+  render();
+  start();
+}
 function initJobChips() {
   document.querySelectorAll(".video-filter-chip").forEach((chip) => {
     chip.setAttribute("aria-pressed", "false");
@@ -945,5 +992,6 @@ hydrateYouTubeVideosFromApi();
 initJobChips();
 initJobChipSliderControls();
 initFeaturedRecommendControls();
+initChannelSideCarousel();
 enableDragScroll(".job-chip-row");
 enableDragScroll(".featured-recommend-row");
